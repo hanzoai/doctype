@@ -1,4 +1,4 @@
-package framework
+package doctype
 
 import (
 	"sort"
@@ -43,8 +43,8 @@ func RegisterModule(module string, fixtures []DocType) {
 	moduleRegistry[module] = append(moduleRegistry[module], cp...)
 }
 
-// moduleFixtures returns the registered fixtures for a module (nil if none).
-func moduleFixtures(module string) []DocType {
+// Fixtures returns the registered fixtures for a module (nil if none).
+func Fixtures(module string) []DocType {
 	moduleMu.RLock()
 	defer moduleMu.RUnlock()
 	return moduleRegistry[module]
@@ -68,9 +68,9 @@ func registeredModules() []string {
 // from a package init(), so a missing blank import silently empties this set.
 func RegisteredModules() []string { return registeredModules() }
 
-// resetModules clears the registry AND the always-on set. TEST-ONLY, mirroring
+// ResetModules clears the registry AND the always-on set. TEST-ONLY, mirroring
 // resetHooks — keeps install tests independent of process-global registrations.
-func resetModules() {
+func ResetModules() {
 	moduleMu.Lock()
 	defer moduleMu.Unlock()
 	moduleRegistry = map[string][]DocType{}
@@ -117,12 +117,12 @@ func sortedAlwaysOnLocked() []string {
 	return out
 }
 
-// alwaysOnDocType resolves a DocType by name from the always-on fixture set: the first
+// AlwaysOn resolves a DocType by name from the always-on fixture set: the first
 // always-on module (in deterministic module order) that declares a fixture of that
 // name, module-stamped and normalized (secure-by-default perms seeded). ok=false when
 // no always-on module provides it. The Store uses this as the fallback when an org has
 // no stored row — a fresh org resolves the lane's schema without a per-org install.
-func alwaysOnDocType(name string) (DocType, bool) {
+func AlwaysOn(name string) (DocType, bool) {
 	moduleMu.RLock()
 	defer moduleMu.RUnlock()
 	for _, m := range sortedAlwaysOnLocked() {
@@ -135,11 +135,11 @@ func alwaysOnDocType(name string) (DocType, bool) {
 	return DocType{}, false
 }
 
-// alwaysOnDocTypes returns every always-on DocType fixture, module-stamped and
+// AlwaysOnAll returns every always-on DocType fixture, module-stamped and
 // normalized, in deterministic order (module asc, then fixture order). ListDocTypes
 // unions these in so a fresh org's listing matches GetDocType (no "resolves but doesn't
 // list" asymmetry).
-func alwaysOnDocTypes() []DocType {
+func AlwaysOnAll() []DocType {
 	moduleMu.RLock()
 	defer moduleMu.RUnlock()
 	var out []DocType
@@ -159,6 +159,6 @@ func stampFixture(dt DocType, module string) DocType {
 	dt.Module = module
 	dt.Fields = append([]DocField(nil), dt.Fields...)
 	dt.Perms = append([]DocPerm(nil), dt.Perms...)
-	dt.normalize()
+	dt.Normalize()
 	return dt
 }

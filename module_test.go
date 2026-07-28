@@ -1,177 +1,160 @@
-package framework
+package doctype
 
-import (
-	"encoding/json"
-	"net/http"
-	"testing"
-)
+import "testing"
 
-// testFixtures is a tiny two-DocType lane used to exercise the generic install
-// path without depending on any real app lane (clients/cms imports framework, so
-// framework's own tests can't import it back).
-func testFixtures() []DocType {
+func lane() []DocType {
 	return []DocType{
-		{Name: "Widget", Fields: []DocField{{Fieldname: "code", Fieldtype: FieldData, Reqd: true}}},
-		{Name: "Gadget", Module: "wrong", Fields: []DocField{{Fieldname: "label", Fieldtype: FieldData}}},
+		{Name: "Article", TitleField: "title", Fields: []DocField{
+			{Fieldname: "title", Fieldtype: FieldData, Reqd: true},
+		}},
+		{Name: "Category", Fields: []DocField{{Fieldname: "label", Fieldtype: FieldData}}},
 	}
 }
 
-// withTestModule registers a lane for the duration of a test and resets the
-// process-global registry afterward (mirrors resetHooks in the hook tests).
-func withTestModule(t *testing.T, module string, fx []DocType) {
+func withLane(t *testing.T, module string, fx []DocType) {
 	t.Helper()
-	resetModules()
+	ResetModules()
 	RegisterModule(module, fx)
-	t.Cleanup(resetModules)
+	t.Cleanup(ResetModules)
 }
 
-func TestInstallModule_CreatesFixturesStampedWithModule(t *testing.T) {
-	withTestModule(t, "shop", testFixtures())
-	app := mountApp(t)
-
-	code, body := do(t, app, http.MethodPost, "/v1/framework/modules/shop/install", "acme", nil)
-	if code != http.StatusOK {
-		t.Fatalf("install want 200, got %d (%s)", code, body)
+func TestRegisterModule(t *testing.T) {
+	withLane(t, "cms", lane())
+	fx := Fixtures("cms")
+	if len(fx) != 2 {
+		t.Fatalf("Fixtures(cms) = %d fixtures, want 2", len(fx))
 	}
-	var res struct {
-		Module   string   `json:"module"`
-		Created  []string `json:"created"`
-		Existing []string `json:"existing"`
+	if got := RegisteredModules(); len(got) != 1 || got[0] != "cms" {
+		t.Fatalf("RegisteredModules = %v", got)
 	}
-	_ = json.Unmarshal(body, &res)
-	if res.Module != "shop" || len(res.Created) != 2 || len(res.Existing) != 0 {
-		t.Fatalf("install result mismatch: %+v", res)
-	}
-
-	// The fixtures now exist in the org AND carry the module tag (Gadget's stray
-	// "wrong" module is overwritten with the lane's own name).
-	code, body = do(t, app, http.MethodGet, "/v1/framework/doctypes/Gadget", "acme", nil)
-	if code != http.StatusOK {
-		t.Fatalf("get installed doctype want 200, got %d (%s)", code, body)
-	}
-	var dt DocType
-	_ = json.Unmarshal(body, &dt)
-	if dt.Module != "shop" {
-		t.Fatalf("installed doctype module want %q, got %q", "shop", dt.Module)
+	if Fixtures("nope") != nil {
+		t.Fatal("Fixtures of an unregistered module must be nil")
 	}
 }
 
-func TestInstallModule_Idempotent(t *testing.T) {
-	withTestModule(t, "shop", testFixtures())
-	app := mountApp(t)
-
-	if code, body := do(t, app, http.MethodPost, "/v1/framework/modules/shop/install", "acme", nil); code != http.StatusOK {
-		t.Fatalf("first install want 200, got %d (%s)", code, body)
-	}
-	// Second install creates nothing and reports everything as already present.
-	code, body := do(t, app, http.MethodPost, "/v1/framework/modules/shop/install", "acme", nil)
-	var res struct {
-		Created  []string `json:"created"`
-		Existing []string `json:"existing"`
-	}
-	_ = json.Unmarshal(body, &res)
-	if code != http.StatusOK || len(res.Created) != 0 || len(res.Existing) != 2 {
-		t.Fatalf("idempotent install want created=0 existing=2, got %d %+v", code, res)
+func TestRegisterModule_IgnoresEmpty(t *testing.T) {
+	ResetModules()
+	t.Cleanup(ResetModules)
+	RegisterModule("", lane())
+	RegisterModule("cms", nil)
+	if got := RegisteredModules(); len(got) != 0 {
+		t.Fatalf("empty registrations were recorded: %v", got)
 	}
 }
 
-func TestInstallModule_UnknownModule404(t *testing.T) {
-	withTestModule(t, "shop", testFixtures())
-	app := mountApp(t)
-	if code, _ := do(t, app, http.MethodPost, "/v1/framework/modules/ghost/install", "acme", nil); code != http.StatusNotFound {
-		t.Fatalf("unknown module install want 404, got %d", code)
+// TestRegisterModule_ClonesInput: the caller's slice must not be a live handle
+// into the process-global registry.
+func TestRegisterModule_ClonesInput(t *testing.T) {
+	fx := lane()
+	withLane(t, "cms", fx)
+	fx[0].Name = "MUTATED"
+	if got := Fixtures("cms"); got[0].Name != "Article" {
+		t.Fatalf("registry mutated through the caller's slice: %q", got[0].Name)
 	}
 }
 
-// TestInstallModule_TenantIsolation: installing into one org NEVER creates the
-// lane's DocTypes in another org.
-func TestInstallModule_TenantIsolation(t *testing.T) {
-	withTestModule(t, "shop", testFixtures())
-	app := mountApp(t)
-
-	if code, _ := do(t, app, http.MethodPost, "/v1/framework/modules/shop/install", "acme", nil); code != http.StatusOK {
-		t.Fatal("install into acme failed")
+func TestRegisteredModules_Sorted(t *testing.T) {
+	ResetModules()
+	t.Cleanup(ResetModules)
+	for _, m := range []string{"zoo", "cms", "erp"} {
+		RegisterModule(m, lane())
 	}
-	// A different tenant sees NONE of acme's installed DocTypes.
-	code, body := do(t, app, http.MethodGet, "/v1/framework/doctypes", "victim", nil)
-	var list struct {
-		Data []DocType `json:"data"`
-	}
-	_ = json.Unmarshal(body, &list)
-	if code != http.StatusOK || len(list.Data) != 0 {
-		t.Fatalf("victim org must have zero doctypes, got %d %+v", code, list.Data)
+	got := RegisteredModules()
+	want := []string{"cms", "erp", "zoo"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("RegisteredModules = %v, want %v", got, want)
+		}
 	}
 }
 
-// TestInstallModule_ForgedPrincipalRefused: an X-Org-Id with no validated
-// principal (no X-User-Id) is refused before any store access.
-func TestInstallModule_ForgedPrincipalRefused(t *testing.T) {
-	withTestModule(t, "shop", testFixtures())
-	app := mountApp(t)
-	// call with empty user = no validated principal.
-	if code, _ := call(t, app, http.MethodPost, "/v1/framework/modules/shop/install", "victim", "", false, nil); code != http.StatusForbidden {
-		t.Fatalf("forged-principal install want 403, got %d", code)
+func TestAlwaysOn(t *testing.T) {
+	withLane(t, "guide", lane())
+	if _, ok := AlwaysOn("Article"); ok {
+		t.Fatal("a module resolves always-on before MarkAlwaysOn")
+	}
+	MarkAlwaysOn("guide")
+	dt, ok := AlwaysOn("Article")
+	if !ok {
+		t.Fatal("always-on fixture did not resolve")
+	}
+	// Resolved fixtures are module-stamped and normalized (perms seeded).
+	if dt.Module != "guide" {
+		t.Fatalf("fixture not stamped with its module: %q", dt.Module)
+	}
+	if len(dt.Perms) != 1 || dt.Perms[0].Role != RoleSystemManager {
+		t.Fatalf("resolved fixture not normalized: %+v", dt.Perms)
+	}
+	if _, ok := AlwaysOn("Nope"); ok {
+		t.Fatal("resolved a fixture that was never registered")
+	}
+	if got := AlwaysOnModules(); len(got) != 1 || got[0] != "guide" {
+		t.Fatalf("AlwaysOnModules = %v", got)
 	}
 }
 
-// TestInstallModule_NonOwnerDenied: after the owner is seeded (trust-on-first-use),
-// a different member of the same org who is not a System Manager cannot install.
-func TestInstallModule_NonOwnerDenied(t *testing.T) {
-	withTestModule(t, "shop", testFixtures())
-	app := mountApp(t)
-
-	// u_acme installs first → becomes System Manager (owner seed).
-	if code, _ := call(t, app, http.MethodPost, "/v1/framework/modules/shop/install", "acme", "u_acme", false, nil); code != http.StatusOK {
-		t.Fatal("owner install failed")
+// TestAlwaysOnAll_MatchesAlwaysOn: listing and resolution must agree, or a
+// fresh org gets a DocType that resolves but never lists.
+func TestAlwaysOnAll_MatchesAlwaysOn(t *testing.T) {
+	withLane(t, "guide", lane())
+	MarkAlwaysOn("guide")
+	all := AlwaysOnAll()
+	if len(all) != 2 {
+		t.Fatalf("AlwaysOnAll = %d, want 2", len(all))
 	}
-	// A different, non-admin member of acme is denied (org is now owned).
-	if code, _ := call(t, app, http.MethodPost, "/v1/framework/modules/shop/install", "acme", "u_intruder", false, nil); code != http.StatusForbidden {
-		t.Fatalf("non-owner install want 403, got %d", code)
-	}
-}
-
-func TestListAndGetModule(t *testing.T) {
-	withTestModule(t, "shop", testFixtures())
-	app := mountApp(t)
-
-	// listModules
-	code, body := do(t, app, http.MethodGet, "/v1/framework/modules", "acme", nil)
-	var lst struct {
-		Data []struct {
-			Module   string   `json:"module"`
-			Doctypes []string `json:"doctypes"`
-		} `json:"data"`
-	}
-	_ = json.Unmarshal(body, &lst)
-	if code != http.StatusOK || len(lst.Data) != 1 || lst.Data[0].Module != "shop" || len(lst.Data[0].Doctypes) != 2 {
-		t.Fatalf("listModules mismatch: %d %+v", code, lst.Data)
-	}
-
-	// getModule before install → installed empty.
-	code, body = do(t, app, http.MethodGet, "/v1/framework/modules/shop", "acme", nil)
-	var g struct {
-		Doctypes  []string `json:"doctypes"`
-		Installed []string `json:"installed"`
-	}
-	_ = json.Unmarshal(body, &g)
-	if code != http.StatusOK || len(g.Doctypes) != 2 || len(g.Installed) != 0 {
-		t.Fatalf("getModule (pre-install) mismatch: %d %+v", code, g)
-	}
-
-	// Install, then getModule → installed lists both.
-	do(t, app, http.MethodPost, "/v1/framework/modules/shop/install", "acme", nil)
-	_, body = do(t, app, http.MethodGet, "/v1/framework/modules/shop", "acme", nil)
-	_ = json.Unmarshal(body, &g)
-	if len(g.Installed) != 2 {
-		t.Fatalf("getModule (post-install) installed want 2, got %+v", g.Installed)
+	for _, dt := range all {
+		if _, ok := AlwaysOn(dt.Name); !ok {
+			t.Fatalf("%q lists but does not resolve", dt.Name)
+		}
 	}
 }
 
-// TestInstallModule_ReservedRouteNotShadowed proves "modules" is a reserved
-// DocType name, so the static module routes can never be shadowed by a document
-// route (define of a DocType named "modules" is refused).
-func TestInstallModule_ReservedRouteNotShadowed(t *testing.T) {
-	if err := (&DocType{Name: "modules", Fields: []DocField{{Fieldname: "a", Fieldtype: FieldData}}}).Validate(); err == nil {
-		t.Fatal("DocType named \"modules\" must be reserved (Validate should fail)")
+// TestAlwaysOn_ResolvedFixtureCannotCorruptRegistry is the cross-tenant
+// invariant: an org mutating the DocType it resolved must not change what the
+// next org resolves.
+func TestAlwaysOn_ResolvedFixtureIsIndependent(t *testing.T) {
+	withLane(t, "guide", lane())
+	MarkAlwaysOn("guide")
+
+	a, _ := AlwaysOn("Article")
+	a.Name = "HIJACKED"
+	a.Fields[0].Fieldname = "hijacked"
+	a.Perms[0].Role = "Hijacker"
+
+	b, ok := AlwaysOn("Article")
+	if !ok || b.Name != "Article" {
+		t.Fatalf("registry name corrupted: %q", b.Name)
+	}
+	if b.Fields[0].Fieldname != "title" {
+		t.Fatalf("registry fields corrupted across orgs: %q", b.Fields[0].Fieldname)
+	}
+	if b.Perms[0].Role != RoleSystemManager {
+		t.Fatalf("registry perms corrupted across orgs: %q", b.Perms[0].Role)
+	}
+}
+
+func TestMarkAlwaysOn_IgnoresEmpty(t *testing.T) {
+	ResetModules()
+	t.Cleanup(ResetModules)
+	MarkAlwaysOn("")
+	if got := AlwaysOnModules(); len(got) != 0 {
+		t.Fatalf("empty module marked always-on: %v", got)
+	}
+}
+
+// TestAlwaysOn_DeterministicAcrossModules: two lanes declaring the same fixture
+// name must resolve to the same one every time (module order, sorted).
+func TestAlwaysOn_Deterministic(t *testing.T) {
+	ResetModules()
+	t.Cleanup(ResetModules)
+	RegisterModule("zoo", []DocType{{Name: "Page", Fields: []DocField{{Fieldname: "a", Fieldtype: FieldData}}}})
+	RegisterModule("cms", []DocType{{Name: "Page", Fields: []DocField{{Fieldname: "b", Fieldtype: FieldData}}}})
+	MarkAlwaysOn("zoo")
+	MarkAlwaysOn("cms")
+	for i := 0; i < 20; i++ {
+		dt, ok := AlwaysOn("Page")
+		if !ok || dt.Module != "cms" {
+			t.Fatalf("non-deterministic resolution: module=%q ok=%v", dt.Module, ok)
+		}
 	}
 }

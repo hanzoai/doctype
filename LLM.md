@@ -1,218 +1,75 @@
-# Hanzo Framework — the DocType engine contract
+# hanzoai/doctype — the DocType metadata model
 
-`clients/framework` is the metadata-driven **DocType engine**, native Go on
-Base/SQLite, mounted in the unified cloud binary at `/v1/framework/*` (subsystem
-order 129). It is Frappe's DocType/metadata core rebuilt in pure Go — **no
-Frappe/Python runtime**. It is the FOUNDATION: CMS content-types, ERPNext
-DocTypes, and Helpdesk are all **just DocTypes** on this one engine, so ONE
-engine + ONE generic `@hanzo/ui` DocType renderer (list/form/detail driven by
-DocType metadata) renders every business app.
+`github.com/hanzoai/doctype` is the **value layer** of the Hanzo Framework
+engine: Frappe's DocType/DocField/DocPerm model rebuilt in Go, with **no
+Frappe/Python runtime** and **no I/O of any kind**.
 
-Sibling app lanes (CMS/ERP/CRM/Helpdesk) build to THIS contract: they define
-their DocTypes on the engine and attach behavior via the Go hook interface. Do
-not fork the engine — extend it through DocTypes + hooks.
+Everything here is computable from a DocType definition and an input value
+alone. Anything that must READ or WRITE tenant data lives one layer up in
+`github.com/hanzoai/framework`.
+
+## Why it is its own module
+
+CMS content-types, ERPNext DocTypes, CRM records and Helpdesk tickets are all
+just DocTypes. A tool that only needs to READ or VALIDATE a schema — a code
+generator, a `@hanzo/ui` renderer, a migration linter, an app lane declaring its
+content model — depends on this module and **links no database**. That is the
+whole reason the split exists.
 
 ## Files
 
 | File | Responsibility |
 |------|----------------|
-| `doctype.go`   | `DocType`/`DocField`/`DocPerm` types, fieldtype set, schema `Validate()` |
-| `store.go`     | per-org SQLite store (doctypes, documents, series, roles); generic CRUD |
-| `validate.go`  | document validation against a DocType schema (all fieldtypes) |
-| `naming.go`    | autoname engine (hash / field / prompt / series patterns) |
-| `secret.go`    | argon2id hashing for Password fields |
-| `permission.go`| per-org role resolution + the `can(doctype, right)` gate |
-| `hook.go`      | the Go lifecycle hook interface + registry |
-| `module.go`    | app-lane fixture registry (`RegisterModule` + per-org install) |
-| `ingest.go`    | in-process API for first-party producers: `Ingest`/`UpdateData`/`Delete`/`Get`/`Search`/`FindByField` — the SAME validate + lifecycle-hook pipeline as the HTTP path, org supplied by the already-validated caller |
-| `framework.go` | Mount + HTTP handlers + registration |
+| `doctype.go` | `DocType`/`DocField`/`DocPerm`, the closed fieldtype set, limits, schema `Validate()` + `Normalize()` |
+| `coerce.go`  | field-value coercion for every fieldtype → the canonical stored value, or a `*ValidationError` |
+| `naming.go`  | the autoname engine: hash / `field:x` / prompt / series patterns, and `ResolveName` |
+| `secret.go`  | argon2id hashing for Password fields (`HashPassword`/`VerifyPassword`/`IsHashed`) |
+| `perm.go`    | the permission calculus: `Grants(dt, roles, right)`, role and right constants |
+| `module.go`  | the app-lane fixture registry (`RegisterModule` / `MarkAlwaysOn` / `AlwaysOn`) |
 
-## Tenant isolation (the security boundary)
+## The split line
 
-Every request resolves its org through the ONE boundary `clients/principal.Tenant`,
-which returns the org ONLY for a **validated principal** (a gateway/BFF-minted
-`X-User-Id` from a verified IAM credential), used **verbatim** and cloned. A
-forged `X-Org-Id` with no validated principal is refused **403** before any store
-access. Every `fw_*` table carries an `org` column and every query filters
-`WHERE org=?`. There is exactly ONE org-derivation path in the package.
+The rule is exactly **"does answering this question require the database?"**
 
-## DocType JSON shape
+- `doctype.Coerce(field, value)` — pure. Is `"2026-13-45"` a valid Date? No DB.
+- `Store.validateDoc` (in `framework`) — impure. Does this Link point at a
+  record that exists **in this org**? Needs the DB.
 
-```json
-{
-  "name": "Sales Invoice",
-  "module": "Accounts",
-  "isSingle": false,
-  "isSubmittable": true,
-  "autoname": "INV-.YYYY.-.#####",
-  "titleField": "customer",
-  "fields": [
-    {"fieldname": "customer",  "fieldtype": "Link",     "label": "Customer", "options": "Customer", "reqd": true},
-    {"fieldname": "region",    "fieldtype": "Data",     "label": "Region",   "fetchFrom": "customer.region"},
-    {"fieldname": "status",    "fieldtype": "Select",   "label": "Status",   "options": "Draft\nPaid", "default": "Draft"},
-    {"fieldname": "total",     "fieldtype": "Currency", "label": "Total"},
-    {"fieldname": "items",     "fieldtype": "Table",    "label": "Items",    "options": "Sales Invoice Item"},
-    {"fieldname": "api_secret","fieldtype": "Password", "label": "API Secret"}
-  ],
-  "permissions": [
-    {"role": "Accounts Manager", "read": true, "write": true, "create": true, "delete": true, "submit": true, "cancel": true},
-    {"role": "Accounts User",    "read": true, "create": true}
-  ]
-}
-```
+Both halves used to live in one `validate.go`; the seam is that question.
 
-### Fieldtypes (mirror Frappe's DocField)
+Two consequences worth knowing:
 
-| Fieldtype | Stored as | Notes |
-|-----------|-----------|-------|
-| `Data` `Text` `SmallText` `LongText` | string | trimmed, ≤100 KB |
-| `Int` | int64 | rejects non-integer |
-| `Float` `Currency` | float64 | |
-| `Check` | int 0/1 | accepts bool/0/1/"true" |
-| `Date` | `"YYYY-MM-DD"` | format-validated |
-| `Datetime` | `"YYYY-MM-DD HH:MM:SS"` | accepts RFC3339, canonicalized |
-| `Select` | string | must be one of `options` (newline-separated) |
-| `Link` | string | the `name` of a doc of `options` DocType; **verified in-org** at write (dangling → 422) |
-| `Table` | `[]object` | child rows validated against the `options` child DocType (one level; no nested tables) |
-| `Attach` | string | URL/path to media |
-| `JSON` | any | stored as-is |
-| `Password` | argon2id hash | **hashed on write, redacted on read** — never returned in clear or as hash (`"__set__"` marker if set). A retrievable secret belongs in KMS, not here. |
+- `Grants` deliberately knows nothing about managers or SuperAdmins. An engine
+  that has already decided the caller is a manager never asks. Keeping the
+  override out of the calculus is what makes the calculus auditable.
+- `Normalize()` seeds a `System Manager` grant onto a permission-less DocType,
+  so **there is no "empty perms means open to all" path anywhere**. `Grants`
+  fails closed for a role-less member regardless.
 
-Field extras: `reqd`, `default`, `unique` (enforced in-org), `readOnly`,
-`hidden`, `inListView`, `fetchFrom` (`"link_field.source_field"` — auto-populate
-from a linked doc; never fetches a Password source).
+## Fieldtypes
 
-### Naming (`autoname`)
+`Data` `Text` `SmallText` `LongText` `RichText` `Int` `Float` `Currency`
+`Check` `Date` `Datetime` `Select` `Link` `Table` `Attach` `JSON` `Password`.
 
-- `""` / `"hash"` → random 128-bit hex id (default)
-- `"field:fieldname"` → the value of that field (must be unique in org+doctype)
-- `"prompt"` → the client supplies `name` in the POST body
-- a **series pattern** → dot-delimited tokens: `YYYY`/`YY`/`MM`/`DD` date parts and
-  a run of `#` marking a zero-padded per-org counter, e.g. `INV-.YYYY.-.#####` →
-  `INV-2026-00001`. No `#` run → a default 5-digit counter is appended.
+The set is CLOSED: a DocField with any other fieldtype is rejected at define
+time, because an unknown type has no validation and is therefore a hole.
 
-## Document CRUD (generic, metadata-driven)
+`Password` is a **write-only credential**: hashed with argon2id on write, and
+the engine returns the fixed marker `__set__` on read — never the plaintext,
+never the hash. A DocType that needs a *retrievable* secret must use KMS, not a
+Password field.
 
-The document wire shape is the field data overlaid with the managed envelope keys
-`name`, `doctype`, `docstatus`, `createdAt`, `updatedAt`. On write, send field
-values at the top level (plus `name` for prompt/single naming); unknown keys are
-ignored.
+## Naming
 
-```
-GET    /v1/framework/:doctype              list   ?filters={"status":"Paid"}&fields=customer,total&order_by=modified desc&limit=50
-POST   /v1/framework/:doctype              create → 201 Document
-GET    /v1/framework/:doctype/:name        detail
-PUT    /v1/framework/:doctype/:name        update (draft only; docstatus 0)
-DELETE /v1/framework/:doctype/:name        delete (a submitted doc must be cancelled first)
-POST   /v1/framework/:doctype/:name/submit docstatus 0→1  (isSubmittable)
-POST   /v1/framework/:doctype/:name/cancel docstatus 1→2  (isSubmittable)
-```
+- `""` / `"hash"` → random 128-bit hex id (the default)
+- `"field:fieldname"` → the value of that field
+- `"prompt"` → the client supplies the name
+- anything else → a series pattern, e.g. `INV-.YYYY.-.#####` → `INV-2026-00001`
 
-`filters` is a JSON object of equality matches (field names must be declared or
-`name`/`docstatus`; values are bound parameters). `fields` projects the returned
-data (envelope keys always included). `order_by` is `"<field> asc|desc"`.
+`ResolveName` handles every mode EXCEPT series, which is the one rule needing a
+durable per-org counter — the engine allocates that inside the create
+transaction.
 
-DocType registry: `GET/POST /v1/framework/doctypes`,
-`GET/PUT/DELETE /v1/framework/doctypes/:name`. Defining/replacing/deleting a
-DocType requires the **System Manager** role (or SuperAdmin).
+## Compatibility
 
-## Permissions (per-org, DocType perms by role) — secure by default
-
-The caller's role source is the framework's OWN per-org role store (IAM's JWT
-carries no roles into the cloud binary), managed at `/v1/framework/roles`
-(`GET`, `POST {user,role}`, `DELETE /:user/:role`). Enforcement:
-
-- **SuperAdmin** (`c.IsAdmin()`, validated owner == AdminOrg) may do anything.
-- **Owner seeding (trust-on-first-use)**: the FIRST validated principal to
-  administer an org that has no role assignments becomes its **System Manager**,
-  persisted ONCE — the org owner/creator. Every later member has no privilege
-  until the owner grants a role. Never crosses a tenant (org is the validated
-  tenant), and exactly one member is auto-granted (deterministically the first).
-- **Default-closed**: a DocType is NEVER open to all. A DocType declared with no
-  `permissions` is seeded a System Manager grant at define time and is therefore
-  manager-only; a role-less member is denied. There is no "empty perms = open"
-  path — the enforcement fails closed.
-- Otherwise, a right (`read`/`write`/`create`/`delete`/`submit`/`cancel`) is
-  granted iff one of the caller's roles carries it in the DocType's `permissions`.
-
-This is stricter than the legacy per-org subsystems (where every org member shared
-org data): the Framework is the new canonical secure-by-default way, and those
-subsystems migrate onto it.
-
-## Go hook interface (lifecycle extension)
-
-Attach server-side behavior to a DocType by registering a `Hook` from a package
-`init()`. This is the pure-Go path, live now; a gpython/goja script runner is a
-LATER, orthogonal add that registers a `Hook` closure implementing THIS SAME
-interface — the engine never grows a second hook path.
-
-```go
-import "github.com/hanzoai/cloud/clients/framework"
-
-func init() {
-    // Compute a total before every save.
-    framework.RegisterHook("Sales Invoice", framework.ActionBeforeSave,
-        func(ctx context.Context, ev *framework.Event) error {
-            var total float64
-            if items, ok := ev.Doc.Data["items"].([]map[string]any); ok {
-                for _, it := range items {
-                    if amt, ok := it["amount"].(float64); ok { total += amt }
-                }
-            }
-            ev.Doc.Data["total"] = total        // mutation persists
-            return nil
-        })
-
-    // Gate: refuse to submit an unbalanced invoice.
-    framework.RegisterHook("Sales Invoice", framework.ActionOnSubmit,
-        func(ctx context.Context, ev *framework.Event) error {
-            if ev.Doc.Data["total"] == float64(0) {
-                return fmt.Errorf("cannot submit a zero-total invoice") // → HTTP 422
-            }
-            return nil
-        })
-}
-```
-
-### Event
-
-```go
-type Event struct {
-    Action  string     // Action* constant
-    Org     string     // VALIDATED tenant — scope every sibling query by it
-    DocType string
-    Doc     *Document  // Name, DocStatus, Data (mutable in before_* phases)
-    Prev    *Document  // previous state on update/submit/cancel; nil on insert
-    Meta    *DocType   // the schema (fields, perms, flags)
-    Store   *Store     // in-org data access for sibling reads/writes
-    Logger  luxlog.Logger
-}
-type Hook func(ctx context.Context, ev *Event) error
-```
-
-### Actions & semantics
-
-| Action | When | Abort? |
-|--------|------|--------|
-| `ActionBeforeInsert` | create only, before naming/insert | yes → 422 |
-| `ActionBeforeSave`   | create AND update, before write | yes → 422 (may mutate `Doc.Data`) |
-| `ActionAfterSave`    | after the row is written | logged, not fatal |
-| `ActionOnSubmit`     | before docstatus 0→1 | yes → 422 |
-| `ActionOnCancel`     | before docstatus 1→2 | yes → 422 |
-| `ActionOnTrash`      | before delete | yes → 422 |
-
-Hooks run **outside** the store transaction (the store uses a single SQLite
-connection; a hook touching `ev.Store` inside an open tx would deadlock). Gate
-hooks therefore run BEFORE the state change: returning an error aborts the
-operation before anything is written. `after_save` runs post-write (the primary
-document write is already atomic; cross-document atomicity is a hook's own
-responsibility). Hooks are trusted first-party Go inside the trust boundary,
-keyed by doctype NAME and applied per-org via `ev.Org`.
-
-## Known scope boundaries (v1)
-
-- Schema changes (`PUT doctype`) do not retro-validate existing documents.
-- Reverse-link integrity on delete is not enforced (forward Link validation at
-  write is; matches the existing per-org subsystems).
-- `after_save` and multi-document hook writes are not atomic with the primary
-  write (deliberate — SQLite single-connection deadlock avoidance).
+Go module rules apply: this stays at `v0.x`/`v1.x` forever. Never `v2`.
