@@ -1,4 +1,4 @@
-package framework
+package doctype
 
 import (
 	"crypto/rand"
@@ -17,7 +17,7 @@ import (
 //   - "field:fieldname"       → the value of that field (must be non-empty; the
 //                               field is typically Unique/Data).
 //   - "prompt"                → the client supplies `name` in the request body.
-//   - anything else           → a SERIES pattern (see expandSeries): dot-delimited
+//   - anything else           → a SERIES pattern (see ExpandSeries): dot-delimited
 //                               tokens with date parts (YYYY/YY/MM/DD) and a run of
 //                               '#' marking a zero-padded per-org counter, e.g.
 //                               "INV-.YYYY.-.#####" → "INV-2026-00001".
@@ -46,9 +46,9 @@ func isHashNaming(autoname string) bool {
 	return a == "" || strings.EqualFold(a, "hash")
 }
 
-// isSeriesNaming reports whether autoname is a series pattern (not hash / field /
-// prompt). Such patterns drive expandSeries + a per-org counter.
-func isSeriesNaming(autoname string) bool {
+// IsSeries reports whether autoname is a series pattern (not hash / field /
+// prompt). Such patterns drive ExpandSeries + a per-org counter.
+func IsSeries(autoname string) bool {
 	a := strings.TrimSpace(autoname)
 	return a != "" && !isHashNaming(a) && !isPromptNaming(a) && autonameField(a) == ""
 }
@@ -63,23 +63,23 @@ func hashName() (string, error) {
 	return hex.EncodeToString(b[:]), nil
 }
 
-// series is the parsed form of a naming pattern: the invariant Key (per which the
+// Series is the parsed form of a naming pattern: the invariant Key (per which the
 // counter increments, per org), the Prefix/Suffix around the counter, and the
 // zero-pad Digits.
-type series struct {
+type Series struct {
 	Key    string
 	Prefix string
 	Suffix string
 	Digits int
 }
 
-// expandSeries parses a naming pattern into a series, expanding date tokens
+// ExpandSeries parses a naming pattern into a series, expanding date tokens
 // against now. Tokens are dot-delimited (Frappe convention): "YYYY"/"YY"/"MM"/
 // "DD" become the corresponding date fields, a run of '#' marks the counter
 // (its length is the zero-pad width), and any other segment is a literal. Dots
 // are delimiters, not literals. A pattern with no '#' run gets a default 5-digit
 // counter appended (Frappe semantics: "MYDOC-" → "MYDOC-00001").
-func expandSeries(pattern string, now time.Time) series {
+func ExpandSeries(pattern string, now time.Time) Series {
 	parts := strings.Split(pattern, ".")
 	var prefix, suffix strings.Builder
 	digits := 0
@@ -105,11 +105,11 @@ func expandSeries(pattern string, now time.Time) series {
 		digits = 5 // default width appended at the end
 	}
 	pfx, sfx := prefix.String(), suffix.String()
-	return series{Key: pfx + "\x00" + sfx, Prefix: pfx, Suffix: sfx, Digits: digits}
+	return Series{Key: pfx + "\x00" + sfx, Prefix: pfx, Suffix: sfx, Digits: digits}
 }
 
-// format renders the document name for counter n.
-func (s series) format(n int64) string {
+// Format renders the document name for counter n.
+func (s Series) Format(n int64) string {
 	return s.Prefix + fmt.Sprintf("%0*d", s.Digits, n) + s.Suffix
 }
 
@@ -140,5 +140,41 @@ func expandDateToken(seg string, now time.Time) string {
 		return fmt.Sprintf("%02d", now.Day())
 	default:
 		return seg
+	}
+}
+
+// ResolveName computes a new document's name for the NON-series naming modes:
+// hash (the default), "field:x", and "prompt". It is pure — the series mode is
+// the one rule that needs a durable per-org counter, so the engine handles that
+// case itself (ExpandSeries + an atomic counter inside the create transaction)
+// and calls here for everything else.
+//
+// `requestedName` is the client-supplied name, used only by prompt naming.
+func ResolveName(dt *DocType, data map[string]any, requestedName string) (string, error) {
+	switch {
+	case isHashNaming(dt.Autoname):
+		return hashName()
+	case autonameField(dt.Autoname) != "":
+		f := autonameField(dt.Autoname)
+		v, _ := data[f].(string)
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return "", Errorf("autoname field %q must have a value", f)
+		}
+		if !docTypeNameRe.MatchString(v) || len(v) > MaxNameLen {
+			return "", Errorf("autoname field %q is not a valid name", f)
+		}
+		return v, nil
+	case isPromptNaming(dt.Autoname):
+		requestedName = strings.TrimSpace(requestedName)
+		if requestedName == "" {
+			return "", Errorf("name is required (autoname: prompt)")
+		}
+		if !docTypeNameRe.MatchString(requestedName) || len(requestedName) > MaxNameLen {
+			return "", Errorf("name %q is invalid", requestedName)
+		}
+		return requestedName, nil
+	default:
+		return hashName()
 	}
 }

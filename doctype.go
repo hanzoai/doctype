@@ -1,58 +1,28 @@
-// Package framework is the Hanzo Framework: a metadata-driven DocType engine,
-// native Go on Base/SQLite, mounted in the unified cloud binary at
-// /v1/framework/*. It is the rebuilt-in-Go successor to Frappe's DocType/metadata
-// core — the FOUNDATION on which CMS content-types, ERPNext DocTypes, and
-// Helpdesk become "just DocTypes", so ONE engine + ONE generic UI renders every
-// business app (maximal DRY). There is NO Frappe/Python runtime dependency; the
-// engine itself is pure Go.
+// Package doctype is the Hanzo DocType metadata model: the pure VALUE layer of
+// the Hanzo Framework engine, faithful to Frappe's DocType/DocField/DocPerm and
+// rebuilt in Go with no Frappe/Python runtime.
 //
-// # The model (faithful to Frappe, flattened onto SQLite)
+// It is deliberately free of I/O. Everything here is computable from a DocType
+// definition and an input value alone: the schema and its well-formedness rules,
+// field-value coercion, the autoname engine, argon2id Password hashing, the
+// permission calculus, and the app-lane fixture registry. Anything that must
+// READ or WRITE tenant data — the store, Link/Unique verification, hooks,
+// leases, role resolution — lives one layer up in github.com/hanzoai/framework.
+//
+// That line is what makes this package reusable: CMS content-types, ERPNext
+// DocTypes, CRM and Helpdesk records are all just DocTypes, and a tool that only
+// needs to READ or VALIDATE a schema (a code generator, a UI renderer, a
+// migration linter) depends on this module alone and links no database.
 //
 //   - A DocType is a metadata definition: {name, module, fields[], permissions[],
-//     isSingle, isSubmittable, autoname, titleField}. It is data, stored per-org.
-//   - A DocField mirrors Frappe's DocField: {fieldname, fieldtype, label, reqd,
-//     options, default, ...}. The fieldtype set is Data, Int, Float, Currency,
-//     Check, Date, Datetime, Text, SmallText, LongText, Select, Link, Table,
-//     Attach, JSON, Password.
-//   - A Document is a schemaless record validated against its DocType at write and
-//     persisted as a JSON blob keyed by (org, doctype, name). docstatus is the
-//     Frappe lifecycle: 0=draft, 1=submitted, 2=cancelled.
-//
-// # Tenant isolation (the security boundary)
-//
-// Every request resolves its org through the ONE boundary — clients/principal
-// .Tenant — which returns the org ONLY for a VALIDATED principal (a gateway- or
-// BFF-minted X-User-Id from a verified IAM credential), verbatim and cloned. A
-// forged X-Org-Id with no validated principal is refused 403 before any store
-// access. Every doctype, document, series counter, and role row carries an `org`
-// column and every query filters WHERE org=?, so org A's schema and data are
-// physically invisible to org B. There is no second org derivation path anywhere
-// in this package.
-//
-// # Surface (all org-scoped; /v1 only)
-//
-//	GET    /v1/framework/doctypes                DocType registry list        -> {data:[…]}
-//	POST   /v1/framework/doctypes                define a DocType             -> DocType (201)
-//	GET    /v1/framework/doctypes/:name          DocType definition           -> DocType
-//	PUT    /v1/framework/doctypes/:name          replace a DocType            -> DocType
-//	DELETE /v1/framework/doctypes/:name          delete a DocType (+ its docs)
-//	GET    /v1/framework/roles                    per-org role assignments     -> {data:[…]}
-//	POST   /v1/framework/roles                    assign (user,role)           -> Role (201)
-//	DELETE /v1/framework/roles/:user/:role        revoke (user,role)
-//	GET    /v1/framework/:doctype                 list documents               -> {data:[…]}
-//	                                              ?filters=&fields=&limit=&order_by=
-//	POST   /v1/framework/:doctype                 create a document            -> Document (201)
-//	GET    /v1/framework/:doctype/:name           document detail              -> Document
-//	PUT    /v1/framework/:doctype/:name           update a document            -> Document
-//	DELETE /v1/framework/:doctype/:name           delete a document
-//	POST   /v1/framework/:doctype/:name/submit    docstatus 0→1 (submittable)  -> Document
-//	POST   /v1/framework/:doctype/:name/cancel    docstatus 1→2 (submittable)  -> Document
-//
-// serve.go auto-registers GET /v1/framework/health. Order 129 binds the surface
-// before the AI subsystem's /v1/* catch-all (150); the static /doctypes + /roles
-// routes register before the generic /:doctype routes so Fiber's first-match scan
-// resolves them unambiguously (and those keywords are reserved DocType names).
-package framework
+//     isSingle, isSubmittable, autoname, titleField}. It is data.
+//   - A DocField mirrors Frappe's DocField. The fieldtype set is closed and
+//     validated at define time (Data, Int, Float, Currency, Check, Date,
+//     Datetime, Text, SmallText, LongText, RichText, Select, Link, Table,
+//     Attach, JSON, Password).
+//   - A document is a schemaless record validated against its DocType at write.
+//     docstatus is the Frappe lifecycle: 0=draft, 1=submitted, 2=cancelled.
+package doctype
 
 import (
 	"fmt"
@@ -103,18 +73,18 @@ var reservedDocTypeNames = map[string]bool{
 	"doctypes": true, "roles": true, "health": true, "summary": true, "modules": true,
 }
 
-// Limits. maxField bounds a single scalar text value; maxDocBytes bounds a whole
+// Limits. MaxFieldBytes bounds a single scalar text value; MaxDocBytes bounds a whole
 // document body so an unbounded blob can't amplify the shared SQLite file;
-// maxFields / maxChildRows bound a schema and a child table.
+// MaxFields / MaxChildRows bound a schema and a child table.
 const (
-	maxField     = 100_000 // 100 KB per scalar (LongText/JSON); Data fields are far smaller
-	maxNameLen   = 255
-	maxDocTypeLn = 140
-	maxDocBytes  = 4 << 20 // 4 MB per document body
-	maxFields    = 512
-	maxChildRows = 5_000
-	defaultLimit = 100
-	maxLimit     = 1000
+	MaxFieldBytes     = 100_000 // 100 KB per scalar (LongText/JSON); Data fields are far smaller
+	MaxNameLen        = 255
+	MaxDocTypeNameLen = 140
+	MaxDocBytes       = 4 << 20 // 4 MB per document body
+	MaxFields         = 512
+	MaxChildRows      = 5_000
+	DefaultLimit      = 100
+	MaxLimit          = 1000
 )
 
 // fieldnameRe is the safe identifier a fieldname must match. Fieldnames are used
@@ -185,7 +155,7 @@ type DocType struct {
 }
 
 // field returns the named DocField and whether it exists.
-func (d *DocType) field(name string) (DocField, bool) {
+func (d *DocType) Field(name string) (DocField, bool) {
 	for _, f := range d.Fields {
 		if f.Fieldname == name {
 			return f, true
@@ -194,9 +164,9 @@ func (d *DocType) field(name string) (DocField, bool) {
 	return DocField{}, false
 }
 
-// selectChoices splits a Select field's newline-separated options into the
+// SelectChoices splits a Select field's newline-separated options into the
 // allowed values (Frappe semantics: a leading blank line means "" is allowed).
-func (f DocField) selectChoices() []string {
+func (f DocField) SelectChoices() []string {
 	raw := strings.Split(f.Options, "\n")
 	out := make([]string, 0, len(raw))
 	for _, s := range raw {
@@ -213,8 +183,8 @@ func (d *DocType) Validate() error {
 	if name == "" {
 		return fmt.Errorf("doctype name is required")
 	}
-	if len(name) > maxDocTypeLn {
-		return fmt.Errorf("doctype name too long (max %d)", maxDocTypeLn)
+	if len(name) > MaxDocTypeNameLen {
+		return fmt.Errorf("doctype name too long (max %d)", MaxDocTypeNameLen)
 	}
 	if !docTypeNameRe.MatchString(name) {
 		return fmt.Errorf("doctype name %q has invalid characters", name)
@@ -225,8 +195,8 @@ func (d *DocType) Validate() error {
 	if len(d.Fields) == 0 {
 		return fmt.Errorf("doctype must declare at least one field")
 	}
-	if len(d.Fields) > maxFields {
-		return fmt.Errorf("too many fields (max %d)", maxFields)
+	if len(d.Fields) > MaxFields {
+		return fmt.Errorf("too many fields (max %d)", MaxFields)
 	}
 	seen := make(map[string]bool, len(d.Fields))
 	for i, f := range d.Fields {
@@ -252,12 +222,12 @@ func (d *DocType) Validate() error {
 	}
 	// FetchFrom + autoname field: references must point at declared fields.
 	if src := autonameField(d.Autoname); src != "" {
-		if _, ok := d.field(src); !ok {
+		if _, ok := d.Field(src); !ok {
 			return fmt.Errorf("autoname field:%s references unknown field", src)
 		}
 	}
 	if d.TitleField != "" {
-		if _, ok := d.field(d.TitleField); !ok {
+		if _, ok := d.Field(d.TitleField); !ok {
 			return fmt.Errorf("titleField %q is not a declared field", d.TitleField)
 		}
 	}
@@ -266,7 +236,7 @@ func (d *DocType) Validate() error {
 			continue
 		}
 		link, _, _ := strings.Cut(f.FetchFrom, ".")
-		lf, ok := d.field(link)
+		lf, ok := d.Field(link)
 		if !ok || lf.Fieldtype != FieldLink {
 			return fmt.Errorf("field %q: fetchFrom source %q must be a Link field", f.Fieldname, link)
 		}
@@ -279,7 +249,7 @@ func (d *DocType) Validate() error {
 	return nil
 }
 
-// normalize trims the DocType's identifying strings in place and defaults empty
+// Normalize trims the DocType's identifying strings in place and defaults empty
 // slices so the stored/returned shape is canonical.
 //
 // SECURE BY DEFAULT: when no permissions are declared, seed the System Manager
@@ -287,7 +257,7 @@ func (d *DocType) Validate() error {
 // governed by the org owner (a System Manager) and closed to everyone else — the
 // generic UI and audit always see an explicit permission set, and the enforcement
 // (permission.can) is default-deny for a role-less member.
-func (d *DocType) normalize() {
+func (d *DocType) Normalize() {
 	d.Name = strings.TrimSpace(d.Name)
 	d.Module = strings.TrimSpace(d.Module)
 	d.Autoname = strings.TrimSpace(d.Autoname)
