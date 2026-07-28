@@ -71,6 +71,7 @@ var needsOptions = map[string]bool{FieldSelect: true, FieldLink: true, FieldTabl
 // without ambiguity.
 var reservedDocTypeNames = map[string]bool{
 	"doctypes": true, "roles": true, "health": true, "summary": true, "modules": true,
+	"changes": true, "stream": true, "presence": true,
 }
 
 // Limits. MaxFieldBytes bounds a single scalar text value; MaxDocBytes bounds a whole
