@@ -73,3 +73,19 @@ transaction.
 ## Compatibility
 
 Go module rules apply: this stays at `v0.x`/`v1.x` forever. Never `v2`.
+
+## Provenance
+
+Original Hanzo work. The model is rebuilt from Frappe's documented behaviour,
+not from its source: `naming.go` is 181 lines covering `YYYY`/`YY`/`MM`/`DD`
+against Frappe's 638-line `naming.py` with its week, timestamp, fiscal-year and
+`{field}` tokens; `perm.go` is one `Grants` function against Frappe's 955-line
+`permissions.py`, and it deliberately DIFFERS — permission-less means closed
+here, where Frappe's default is open. No Frappe code was copied or ported, and
+this module's only dependency is `golang.org/x/crypto`.
+
+Frappe compatibility is vocabulary compatibility, chosen so the schema reads
+familiarly. Apache 2.0 is Hanzo's own grant over its own new code; the `NOTICE`
+is ours to author and carries no inherited obligation, because there is no
+upstream work to carry one from. See `hanzoai/framework`'s `LLM.md` for the
+same statement at the engine layer.
