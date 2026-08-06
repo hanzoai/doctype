@@ -1,0 +1,17 @@
+# Canonical CI/CD config for hanzoai/doctype — the one file both the hanzoai/ci
+# reusable (.hanzo/workflows/cicd.yml) and platform.hanzo.ai read.
+#
+# A Go module (the doctype schema: coercion, naming, permissions, secrets) that
+# hanzoai/framework and hanzoai/base both compile against. It ships from a tag
+# and builds no image, so there is no `images:` and no `deploy:` — only a gate.
+#
+# The suite is the contract every consumer depends on: coerce, naming, perm and
+# secret each have a test file, and the stampfixture guard exists to keep the
+# fixtures honest. `-count=1` so a green is this commit and not the test cache.
+test:
+  - name: build
+    run: |
+      set -e
+      go build ./...
+      go vet ./...
+      go test -race -count=1 ./...
