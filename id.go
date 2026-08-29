@@ -28,12 +28,10 @@ type ID struct {
 	Name   string
 }
 
-// Address renders the pair as module.name. It is the form a URL segment, a
-// Link/Table target and a stored document's doctype key all carry.
-func Address(module, name string) string { return module + "." + name }
-
-// String is the address of this ID.
-func (id ID) String() string { return Address(id.Module, id.Name) }
+// String renders the pair as module.name — the address. It is the form a URL
+// segment, a Link/Table target and a stored document's doctype key all carry,
+// and the only way to write one.
+func (id ID) String() string { return id.Module + "." + id.Name }
 
 // Zero reports that the ID names nothing. The zero ID is what an unresolved
 // caller is handed, and every lookup refuses it.
@@ -54,10 +52,10 @@ func (id ID) Validate() error {
 	return nil
 }
 
-// Parse reads an address. The separator is the ONLY dot: a module name carries
+// ParseID reads an address. The separator is the ONLY dot: a module name carries
 // none and a doctype name carries none, so a second dot is a malformed address
 // rather than a name to be split differently.
-func Parse(s string) (ID, error) {
+func ParseID(s string) (ID, error) {
 	module, name, ok := strings.Cut(strings.TrimSpace(s), ".")
 	if !ok {
 		return ID{}, fmt.Errorf("doctype address %q is not module.name", s)
@@ -82,7 +80,7 @@ func (id *ID) UnmarshalJSON(b []byte) error {
 	if err := json.Unmarshal(b, &s); err != nil {
 		return err
 	}
-	got, err := Parse(s)
+	got, err := ParseID(s)
 	if err != nil {
 		return err
 	}

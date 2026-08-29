@@ -216,7 +216,7 @@ func (d *DocType) Validate() error {
 		// its address — always, including a target in the declaring module. One
 		// form, so nothing has to know whose module a bare name belonged to.
 		if f.Fieldtype == FieldLink || f.Fieldtype == FieldTable {
-			if _, err := Parse(f.Options); err != nil {
+			if _, err := ParseID(f.Options); err != nil {
 				return fmt.Errorf("field %q: %s target: %w", f.Fieldname, f.Fieldtype, err)
 			}
 		}

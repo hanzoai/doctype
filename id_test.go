@@ -16,9 +16,9 @@ func TestParseIsTheInverseOfString(t *testing.T) {
 		{Module: "Projects", Name: "Sales Invoice"},
 		{Module: "cms", Name: "Page"},
 	} {
-		got, err := Parse(id.String())
+		got, err := ParseID(id.String())
 		if err != nil {
-			t.Fatalf("Parse(%q): %v", id, err)
+			t.Fatalf("ParseID(%q): %v", id, err)
 		}
 		if got != id {
 			t.Fatalf("round trip %q → %#v", id, got)
@@ -29,9 +29,6 @@ func TestParseIsTheInverseOfString(t *testing.T) {
 func TestAddressForm(t *testing.T) {
 	if got := (ID{Module: "kb", Name: "page"}).String(); got != "kb.page" {
 		t.Fatalf("address = %q, want kb.page", got)
-	}
-	if got := Address("help", "ticket"); got != "help.ticket" {
-		t.Fatalf("Address = %q, want help.ticket", got)
 	}
 }
 
@@ -46,8 +43,8 @@ func TestParseRejectsMalformed(t *testing.T) {
 		"kb.pa/ge",      // path character
 		"summary",       // a static route segment is not an address, and cannot be
 	} {
-		if id, err := Parse(s); err == nil {
-			t.Fatalf("Parse(%q) accepted → %#v", s, id)
+		if id, err := ParseID(s); err == nil {
+			t.Fatalf("ParseID(%q) accepted → %#v", s, id)
 		}
 	}
 }
@@ -57,7 +54,7 @@ func TestParseRejectsMalformed(t *testing.T) {
 // can no longer be named into a route that already exists.
 func TestNoAddressCollidesWithAStaticSegment(t *testing.T) {
 	for _, seg := range []string{"doctypes", "modules", "summary", "roles", "health"} {
-		if _, err := Parse(seg); err == nil {
+		if _, err := ParseID(seg); err == nil {
 			t.Fatalf("static segment %q parsed as an address", seg)
 		}
 		// And a DocType may legally be NAMED that, because its address is not.
