@@ -65,14 +65,6 @@ var validFieldtypes = map[string]bool{
 // (newline-separated choices), Link (target DocType), Table (child DocType).
 var needsOptions = map[string]bool{FieldSelect: true, FieldLink: true, FieldTable: true}
 
-// reservedDocTypeNames are names a DocType may NOT take because they collide with
-// a static route segment under /v1/framework/. Rejecting them at define time is
-// why the static routes can be registered before the generic /:doctype routes
-// without ambiguity.
-var reservedDocTypeNames = map[string]bool{
-	"doctypes": true, "roles": true, "health": true, "summary": true, "modules": true,
-}
-
 // Limits. MaxFieldBytes bounds a single scalar text value; MaxDocBytes bounds a whole
 // document body so an unbounded blob can't amplify the shared SQLite file;
 // MaxFields / MaxChildRows bound a schema and a child table.
@@ -92,12 +84,16 @@ const (
 // this is defense-in-depth) and as JSON keys, so they are strict snake tokens.
 var fieldnameRe = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
-// docTypeNameRe is the safe identifier a DocType or document name must match. It
-// permits the Frappe-ish label set (letters, digits, space, dash, dot, underscore)
-// so "Sales Invoice" or "INV-2026-0001" are legal, while excluding path/quote/
-// control characters. Names are always BOUND parameters in SQL — never
-// interpolated — so this is a well-formedness gate, not the injection defense.
-var docTypeNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 ._-]*$`)
+// docTypeNameRe is the safe identifier a DocType name must match: the Frappe-ish
+// label set (letters, digits, space, dash, underscore) so "Sales Invoice" is
+// legal, minus the DOT, which joins a module to a name in an address and so
+// cannot also occur inside one. Path/quote/control characters are excluded.
+// Names are always BOUND parameters in SQL — never interpolated — so this is a
+// well-formedness gate, not the injection defense.
+//
+// A DOCUMENT name keeps the dot (docNameRe, naming.go): it is its own path
+// segment, addressed after the doctype has already been resolved.
+var docTypeNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 _-]*$`)
 
 // DocField is one field in a DocType, faithful to Frappe's DocField. JSON tags
 // are the wire contract the sibling app lanes (CMS/ERP/CRM) and the generic
@@ -135,9 +131,12 @@ type DocPerm struct {
 	Cancel bool   `json:"cancel,omitempty"`
 }
 
-// DocType is a metadata definition. It is per-org data: the same DocType `name`
-// may exist independently in many orgs with different fields, and one org's
-// definition is invisible to another.
+// DocType is a metadata definition, identified by the pair (Module, Name) — see
+// ID. The name is unique within the module and nowhere else, so a module may
+// declare a "page" without knowing whether another one already has.
+//
+// It is per-org data: the same DocType may exist independently in many orgs with
+// different fields, and one org's definition is invisible to another.
 type DocType struct {
 	Name          string `json:"name"`
 	Module        string `json:"module,omitempty"`
@@ -183,14 +182,14 @@ func (d *DocType) Validate() error {
 	if name == "" {
 		return fmt.Errorf("doctype name is required")
 	}
-	if len(name) > MaxDocTypeNameLen {
-		return fmt.Errorf("doctype name too long (max %d)", MaxDocTypeNameLen)
+	module := strings.TrimSpace(d.Module)
+	if module == "" {
+		return fmt.Errorf("doctype module is required")
 	}
-	if !docTypeNameRe.MatchString(name) {
-		return fmt.Errorf("doctype name %q has invalid characters", name)
-	}
-	if reservedDocTypeNames[strings.ToLower(name)] {
-		return fmt.Errorf("doctype name %q is reserved", name)
+	// One check for both halves, so "what is a legal address" has one answer
+	// (id.go) and this does not hold a second copy of it.
+	if err := (ID{Module: module, Name: name}).Validate(); err != nil {
+		return err
 	}
 	if len(d.Fields) == 0 {
 		return fmt.Errorf("doctype must declare at least one field")
@@ -212,6 +211,14 @@ func (d *DocType) Validate() error {
 		}
 		if needsOptions[f.Fieldtype] && strings.TrimSpace(f.Options) == "" {
 			return fmt.Errorf("field %q: fieldtype %s requires options", f.Fieldname, f.Fieldtype)
+		}
+		// A Link or Table target names ANOTHER DocType, and a DocType is named by
+		// its address — always, including a target in the declaring module. One
+		// form, so nothing has to know whose module a bare name belonged to.
+		if f.Fieldtype == FieldLink || f.Fieldtype == FieldTable {
+			if _, err := Parse(f.Options); err != nil {
+				return fmt.Errorf("field %q: %s target: %w", f.Fieldname, f.Fieldtype, err)
+			}
 		}
 		if f.FetchFrom != "" {
 			src, _, ok := strings.Cut(f.FetchFrom, ".")

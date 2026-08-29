@@ -7,7 +7,7 @@ import (
 
 // ok is the minimal well-formed DocType the schema tests mutate.
 func ok() DocType {
-	return DocType{Name: "Sales Invoice", Fields: []DocField{
+	return DocType{Name: "Sales Invoice", Module: "erp", Fields: []DocField{
 		{Fieldname: "customer", Fieldtype: FieldData, Reqd: true},
 	}}
 }
@@ -31,8 +31,16 @@ func TestValidate_RejectsMalformed(t *testing.T) {
 		{"empty name", "name is required", func(d *DocType) { d.Name = "  " }},
 		{"long name", "too long", func(d *DocType) { d.Name = strings.Repeat("x", MaxDocTypeNameLen+1) }},
 		{"bad chars", "invalid characters", func(d *DocType) { d.Name = "Sales/Invoice" }},
-		{"reserved", "is reserved", func(d *DocType) { d.Name = "doctypes" }},
-		{"reserved cased", "is reserved", func(d *DocType) { d.Name = "Roles" }},
+		{"dotted name", "invalid characters", func(d *DocType) { d.Name = "erp.Invoice" }},
+		{"empty module", "module is required", func(d *DocType) { d.Module = " " }},
+		{"bad module", "module \"a b\" has invalid characters", func(d *DocType) { d.Module = "a b" }},
+		{"dotted module", "invalid characters", func(d *DocType) { d.Module = "a.b" }},
+		{"link target unqualified", "not module.name", func(d *DocType) {
+			d.Fields[0].Fieldtype, d.Fields[0].Options = FieldLink, "Customer"
+		}},
+		{"table target unqualified", "not module.name", func(d *DocType) {
+			d.Fields[0].Fieldtype, d.Fields[0].Options = FieldTable, "Item"
+		}},
 		{"no fields", "at least one field", func(d *DocType) { d.Fields = nil }},
 		{"bad fieldname", "must match", func(d *DocType) { d.Fields[0].Fieldname = "Customer" }},
 		{"unknown fieldtype", "unknown fieldtype", func(d *DocType) { d.Fields[0].Fieldtype = "Blob" }},

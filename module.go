@@ -117,19 +117,24 @@ func sortedAlwaysOnLocked() []string {
 	return out
 }
 
-// AlwaysOn resolves a DocType by name from the always-on fixture set: the first
-// always-on module (in deterministic module order) that declares a fixture of that
-// name, module-stamped and normalized (secure-by-default perms seeded). ok=false when
-// no always-on module provides it. The Store uses this as the fallback when an org has
-// no stored row — a fresh org resolves the lane's schema without a per-org install.
-func AlwaysOn(name string) (DocType, bool) {
+// AlwaysOn resolves a DocType from the always-on fixture set by its ADDRESS,
+// module-stamped and normalized (secure-by-default perms seeded). ok=false when
+// the named module is not always-on or declares no such fixture. The Store uses
+// this as the fallback when an org has no stored row — a fresh org resolves the
+// lane's schema without a per-org install.
+//
+// The module is part of the question, so two lanes declaring a "Page" resolve to
+// their own. Asking by name alone had to break the tie by module order, which
+// answered one lane's question with the other lane's schema.
+func AlwaysOn(id ID) (DocType, bool) {
 	moduleMu.RLock()
 	defer moduleMu.RUnlock()
-	for _, m := range sortedAlwaysOnLocked() {
-		for _, dt := range moduleRegistry[m] {
-			if dt.Name == name {
-				return stampFixture(dt, m), true
-			}
+	if !alwaysOn[id.Module] {
+		return DocType{}, false
+	}
+	for _, dt := range moduleRegistry[id.Module] {
+		if dt.Name == id.Name {
+			return stampFixture(dt, id.Module), true
 		}
 	}
 	return DocType{}, false

@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -161,7 +162,7 @@ func ResolveName(dt *DocType, data map[string]any, requestedName string) (string
 		if v == "" {
 			return "", Errorf("autoname field %q must have a value", f)
 		}
-		if !docTypeNameRe.MatchString(v) || len(v) > MaxNameLen {
+		if !docNameRe.MatchString(v) || len(v) > MaxNameLen {
 			return "", Errorf("autoname field %q is not a valid name", f)
 		}
 		return v, nil
@@ -170,7 +171,7 @@ func ResolveName(dt *DocType, data map[string]any, requestedName string) (string
 		if requestedName == "" {
 			return "", Errorf("name is required (autoname: prompt)")
 		}
-		if !docTypeNameRe.MatchString(requestedName) || len(requestedName) > MaxNameLen {
+		if !docNameRe.MatchString(requestedName) || len(requestedName) > MaxNameLen {
 			return "", Errorf("name %q is invalid", requestedName)
 		}
 		return requestedName, nil
@@ -178,3 +179,10 @@ func ResolveName(dt *DocType, data map[string]any, requestedName string) (string
 		return hashName()
 	}
 }
+
+// docNameRe is the safe identifier a DOCUMENT name must match. It is
+// docTypeNameRe plus the dot: "INV-2026-0001" and "my.page" are both legal,
+// because a document name is its own path segment, read after the doctype has
+// already been resolved from the segment before it. A doctype name has to give
+// the dot up; a document name does not.
+var docNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 ._-]*$`)

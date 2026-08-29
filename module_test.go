@@ -70,11 +70,11 @@ func TestRegisteredModules_Sorted(t *testing.T) {
 
 func TestAlwaysOn(t *testing.T) {
 	withLane(t, "guide", lane())
-	if _, ok := AlwaysOn("Article"); ok {
+	if _, ok := AlwaysOn(ID{Module: "guide", Name: "Article"}); ok {
 		t.Fatal("a module resolves always-on before MarkAlwaysOn")
 	}
 	MarkAlwaysOn("guide")
-	dt, ok := AlwaysOn("Article")
+	dt, ok := AlwaysOn(ID{Module: "guide", Name: "Article"})
 	if !ok {
 		t.Fatal("always-on fixture did not resolve")
 	}
@@ -85,7 +85,7 @@ func TestAlwaysOn(t *testing.T) {
 	if len(dt.Perms) != 1 || dt.Perms[0].Role != RoleSystemManager {
 		t.Fatalf("resolved fixture not normalized: %+v", dt.Perms)
 	}
-	if _, ok := AlwaysOn("Nope"); ok {
+	if _, ok := AlwaysOn(ID{Module: "guide", Name: "Nope"}); ok {
 		t.Fatal("resolved a fixture that was never registered")
 	}
 	if got := AlwaysOnModules(); len(got) != 1 || got[0] != "guide" {
@@ -103,7 +103,7 @@ func TestAlwaysOnAll_MatchesAlwaysOn(t *testing.T) {
 		t.Fatalf("AlwaysOnAll = %d, want 2", len(all))
 	}
 	for _, dt := range all {
-		if _, ok := AlwaysOn(dt.Name); !ok {
+		if _, ok := AlwaysOn(dt.ID()); !ok {
 			t.Fatalf("%q lists but does not resolve", dt.Name)
 		}
 	}
@@ -116,12 +116,12 @@ func TestAlwaysOn_ResolvedFixtureIsIndependent(t *testing.T) {
 	withLane(t, "guide", lane())
 	MarkAlwaysOn("guide")
 
-	a, _ := AlwaysOn("Article")
+	a, _ := AlwaysOn(ID{Module: "guide", Name: "Article"})
 	a.Name = "HIJACKED"
 	a.Fields[0].Fieldname = "hijacked"
 	a.Perms[0].Role = "Hijacker"
 
-	b, ok := AlwaysOn("Article")
+	b, ok := AlwaysOn(ID{Module: "guide", Name: "Article"})
 	if !ok || b.Name != "Article" {
 		t.Fatalf("registry name corrupted: %q", b.Name)
 	}
@@ -142,19 +142,26 @@ func TestMarkAlwaysOn_IgnoresEmpty(t *testing.T) {
 	}
 }
 
-// TestAlwaysOn_DeterministicAcrossModules: two lanes declaring the same fixture
-// name must resolve to the same one every time (module order, sorted).
-func TestAlwaysOn_Deterministic(t *testing.T) {
+// TestAlwaysOn_SameNameDifferentModules: two lanes may both declare a "Page",
+// and each resolves its OWN. Asking by name alone had to break that tie by
+// module order, which handed one lane the other lane's schema.
+func TestAlwaysOn_SameNameDifferentModules(t *testing.T) {
 	ResetModules()
 	t.Cleanup(ResetModules)
 	RegisterModule("zoo", []DocType{{Name: "Page", Fields: []DocField{{Fieldname: "a", Fieldtype: FieldData}}}})
 	RegisterModule("cms", []DocType{{Name: "Page", Fields: []DocField{{Fieldname: "b", Fieldtype: FieldData}}}})
 	MarkAlwaysOn("zoo")
 	MarkAlwaysOn("cms")
-	for i := 0; i < 20; i++ {
-		dt, ok := AlwaysOn("Page")
-		if !ok || dt.Module != "cms" {
-			t.Fatalf("non-deterministic resolution: module=%q ok=%v", dt.Module, ok)
+	for _, want := range []struct{ module, field string }{{"zoo", "a"}, {"cms", "b"}} {
+		dt, ok := AlwaysOn(ID{Module: want.module, Name: "Page"})
+		if !ok || dt.Module != want.module || dt.Fields[0].Fieldname != want.field {
+			t.Fatalf("%s.Page resolved to module=%q field=%q ok=%v",
+				want.module, dt.Module, dt.Fields[0].Fieldname, ok)
 		}
+	}
+	// A module that declares no such fixture answers no, rather than borrowing
+	// somebody else's.
+	if _, ok := AlwaysOn(ID{Module: "erp", Name: "Page"}); ok {
+		t.Fatal("erp.Page resolved from another module's fixtures")
 	}
 }
