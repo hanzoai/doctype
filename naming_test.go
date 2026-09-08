@@ -111,6 +111,25 @@ func TestResolveName_Field(t *testing.T) {
 	}
 }
 
+// A contact is named by its email, so an address has to survive naming. It did
+// not: the at sign was absent from the document-name set and every real address
+// was refused, which made the DocType impossible to create a row of.
+func TestResolveName_Email(t *testing.T) {
+	dt := &DocType{Autoname: "field:email"}
+	for _, addr := range []string{"ada@example.com", "a.b-c@sub.example.co.uk"} {
+		got, err := ResolveName(dt, map[string]any{"email": addr}, "")
+		if err != nil || got != addr {
+			t.Fatalf("email naming %q = %q, %v", addr, got, err)
+		}
+	}
+	if _, err := ResolveName(dt, map[string]any{"email": "@leading"}, ""); err == nil {
+		t.Fatal("a name must still start with a letter or digit")
+	}
+	if _, err := ResolveName(dt, map[string]any{"email": "a@b/c"}, ""); err == nil {
+		t.Fatal("the slash stays out: it would split the path segment")
+	}
+}
+
 func TestResolveName_Prompt(t *testing.T) {
 	dt := &DocType{Autoname: "prompt"}
 	if got, err := ResolveName(dt, nil, " Sales Invoice "); err != nil || got != "Sales Invoice" {

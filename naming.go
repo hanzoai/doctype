@@ -181,8 +181,13 @@ func ResolveName(dt *DocType, data map[string]any, requestedName string) (string
 }
 
 // docNameRe is the safe identifier a DOCUMENT name must match. It is
-// docTypeNameRe plus the dot: "INV-2026-0001" and "my.page" are both legal,
-// because a document name is its own path segment, read after the doctype has
-// already been resolved from the segment before it. A doctype name has to give
-// the dot up; a document name does not.
-var docNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 ._-]*$`)
+// docTypeNameRe plus the dot and the at sign: "INV-2026-0001", "my.page" and
+// "ada@example.com" are all legal, because a document name is its own path
+// segment, read after the doctype has already been resolved from the segment
+// before it, and both characters are ordinary path characters there. A doctype
+// name has to give them up; a document name does not.
+//
+// The at sign is not decoration. A contact is named by its email
+// (autoname "field:email"), so refusing it means no contact can be created at
+// all — every address has one.
+var docNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 ._@-]*$`)

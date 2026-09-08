@@ -91,8 +91,8 @@ var fieldnameRe = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 // Names are always BOUND parameters in SQL — never interpolated — so this is a
 // well-formedness gate, not the injection defense.
 //
-// A DOCUMENT name keeps the dot (docNameRe, naming.go): it is its own path
-// segment, addressed after the doctype has already been resolved.
+// A DOCUMENT name keeps the dot and the at sign (docNameRe, naming.go): it is
+// its own path segment, addressed after the doctype has already been resolved.
 var docTypeNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 _-]*$`)
 
 // DocField is one field in a DocType, faithful to Frappe's DocField. JSON tags
