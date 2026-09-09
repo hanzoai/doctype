@@ -1,6 +1,6 @@
 module github.com/hanzoai/doctype
 
-go 1.26.5
+go 1.26.8
 
 require golang.org/x/crypto v0.45.0
 
