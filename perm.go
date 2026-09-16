@@ -45,13 +45,7 @@ const (
 // has decided the caller is a manager never asks this question. Keeping the
 // override out of the calculus is what makes the calculus auditable.
 func Grants(dt *DocType, roles map[string]bool, right string) bool {
-	if dt == nil {
-		return false
-	}
-	// An immutable DocType answers write and delete for nobody, ahead of the
-	// rows: what it declares is a property of the RECORD, and a permission row
-	// can only speak about a role.
-	if dt.Immutable && (right == RightWrite || right == RightDelete) {
+	if !Admits(dt, right) {
 		return false
 	}
 	for _, p := range dt.Perms {
@@ -82,4 +76,16 @@ func grants(p DocPerm, right string) bool {
 	default:
 		return false
 	}
+}
+
+// Admits reports whether dt admits `right` at all, before any role is
+// considered. An immutable DocType admits neither write nor delete: what it
+// declares is a property of the RECORD, where a permission row can only speak
+// about a role — so this is also the answer for a caller no row binds, which is
+// what platform sudo is.
+func Admits(dt *DocType, right string) bool {
+	if dt == nil {
+		return false
+	}
+	return !(dt.Immutable && (right == RightWrite || right == RightDelete))
 }
