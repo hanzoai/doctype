@@ -77,3 +77,33 @@ func TestGrants_EmptyRoleSet(t *testing.T) {
 		t.Fatal("a caller with no roles was granted read")
 	}
 }
+
+// TestGrants_Immutable: an immutable DocType admits read and create and refuses
+// write and delete, whatever a role carries. A record that is only ever added to
+// has no writer and no remover, and a permission row cannot say so because a
+// right is a right on every document of the DocType.
+func TestGrants_Immutable(t *testing.T) {
+	dt := permDT(DocPerm{Role: "R", Read: true, Write: true, Create: true, Delete: true})
+	dt.Immutable = true
+	held := map[string]bool{"R": true}
+	if !Grants(dt, held, RightRead) || !Grants(dt, held, RightCreate) {
+		t.Fatal("an immutable DocType still reads and still takes a new document")
+	}
+	if Grants(dt, held, RightWrite) {
+		t.Error("a role wrote over a document of an immutable DocType")
+	}
+	if Grants(dt, held, RightDelete) {
+		t.Error("a role removed a document of an immutable DocType")
+	}
+}
+
+// TestImmutableIsNotSubmittable: submitting moves a stored document's docstatus,
+// so declaring both is refused where every other contradiction is — at define
+// time.
+func TestImmutableIsNotSubmittable(t *testing.T) {
+	dt := permDT(DocPerm{Role: "R", Read: true})
+	dt.Immutable, dt.IsSubmittable = true, true
+	if err := dt.Validate(); err == nil {
+		t.Fatal("a DocType declared immutable AND submittable was accepted")
+	}
+}

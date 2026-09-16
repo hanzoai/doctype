@@ -31,7 +31,9 @@ const (
 	RightCancel = "cancel"
 )
 
-// Grants reports whether any role in `roles` carries `right` on dt.
+// Grants reports whether any role in `roles` carries `right` on dt, and whether
+// dt admits that right at all: an Immutable DocType admits neither write nor
+// delete, from any role.
 //
 // SECURE BY DEFAULT: there is NO "empty perms means open to all" branch. A
 // DocType with no matching grant is closed — the DENY default. (Normalize seeds
@@ -44,6 +46,12 @@ const (
 // override out of the calculus is what makes the calculus auditable.
 func Grants(dt *DocType, roles map[string]bool, right string) bool {
 	if dt == nil {
+		return false
+	}
+	// An immutable DocType answers write and delete for nobody, ahead of the
+	// rows: what it declares is a property of the RECORD, and a permission row
+	// can only speak about a role.
+	if dt.Immutable && (right == RightWrite || right == RightDelete) {
 		return false
 	}
 	for _, p := range dt.Perms {

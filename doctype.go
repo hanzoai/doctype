@@ -142,6 +142,18 @@ type DocType struct {
 	Module        string `json:"module,omitempty"`
 	IsSingle      bool   `json:"isSingle,omitempty"`
 	IsSubmittable bool   `json:"isSubmittable,omitempty"`
+	// Immutable closes a DocType's documents to editing and removal: one may be
+	// read, and a new one created, but no role writes over a stored one or takes
+	// it away. It is the shape of a record that is only ever added to — an act
+	// trail, a filed account, a movement of custody — where a right to rewrite
+	// one is a right to forge it, and a right to remove one is a right to shorten
+	// what happened.
+	//
+	// A right is a right on every document of a DocType and on every field of it,
+	// so a permission row cannot say this: the subsystem that owns the DocType
+	// writes each document once, through the in-process API, and every role on
+	// the generic surface reads. Grants is where that holds.
+	Immutable bool `json:"immutable,omitempty"`
 	// Autoname is the naming rule (see naming.go): "" or "hash" → random id;
 	// "field:fieldname" → value of that field; "prompt" → client supplies name;
 	// any other value is a series pattern, e.g. "INV-.YYYY.-.#####".
@@ -193,6 +205,13 @@ func (d *DocType) Validate() error {
 	}
 	if len(d.Fields) == 0 {
 		return fmt.Errorf("doctype must declare at least one field")
+	}
+	// Submitting and cancelling move a stored document's docstatus, which is a
+	// change to it. A DocType that declares both is asking for two answers to one
+	// question, so it is refused at define time rather than resolved at write
+	// time.
+	if d.Immutable && d.IsSubmittable {
+		return fmt.Errorf("doctype cannot be both immutable and submittable")
 	}
 	if len(d.Fields) > MaxFields {
 		return fmt.Errorf("too many fields (max %d)", MaxFields)
