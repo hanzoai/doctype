@@ -1,5 +1,7 @@
 # DocType
 
+[![Open in Hanzo](https://hanzo.app/badges/open-in-hanzo.svg)](https://hanzo.app/dev/open?repo=github.com/hanzoai/doctype&ref=main&action=open) [![Edit with Hanzo](https://hanzo.app/badges/edit-with-hanzo.svg)](https://hanzo.app/dev/open?repo=github.com/hanzoai/doctype&ref=main&action=edit) [![Deploy with Hanzo](https://hanzo.app/badges/deploy-with-hanzo.svg)](https://hanzo.app/dev/open?repo=github.com/hanzoai/doctype&ref=main&action=deploy)
+
 The metadata model behind the Hanzo Framework, in pure Go: Frappe's
 DocType / DocField / DocPerm rebuilt with no Frappe or Python runtime, and no I/O of any
 kind.
